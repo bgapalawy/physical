@@ -126,7 +126,7 @@
                         // Convert numeric fields
                         if (['rsrc_id', 'task_id', 'proj_id', 'taskrsrc_id'].includes(header)) {
                             row[header] = parseInt(row[header]) || 0;
-                        } else if (['target_qty', 'remain_qty', 'cost_per_qty', 'target_drtn_hr_cnt'].includes(header)) {
+                        } else if (['target_qty', 'remain_qty', 'cost_per_qty', 'target_drtn_hr_cnt', 'phys_complete_pct'].includes(header)) {
                             row[header] = parseFloat(row[header]) || 0;
                         }
                     });
@@ -219,8 +219,6 @@
 
             let new_budget = original_total_material_budget;
             const nonMaterialResourceAssignments = taskRsrcs.filter(r => r.rsrc_type === 'RT_Labor');
-            // const nonMaterialUnits = nonMaterialResourceAssignments.reduce((total, rsrc) => total + (parseFloat(rsrc.target_qty)*parseFloat(rsrc.target_qty_per_hr )|| 0), 0);
-            
             
              // Create a map for quick lookup of tasks by their ID
             const taskMap = new Map(tasks.map(t => [t.task_id, t]));
@@ -320,6 +318,12 @@
                         const durationInHours = parseFloat(task[DURATION_FIELD]) || 0;
                         const targetQtyPerHour = durationInHours > 0 ? (budgetUnits / durationInHours).toFixed(2) : '0.00';
                         
+                        // --- MODIFICATION START ---
+                        const physicalPercentComplete = parseFloat(task.phys_complete_pct) || 0;
+                        const actualUnits = (physicalPercentComplete / 100) * budgetUnits;
+                        const remainingUnits = budgetUnits - actualUnits;
+                        // --- MODIFICATION END ---
+                        
                         const newAssignment = {
                             ...blankAssignment,
                             taskrsrc_id: String(++maxTaskRsrcId),
@@ -327,7 +331,7 @@
                             proj_id: task.proj_id,
                             rsrc_id: newManpowerResource.rsrc_id,
                             target_qty: budgetUnits.toFixed(2),
-                            remain_qty: budgetUnits.toFixed(2),
+                            remain_qty: remainingUnits.toFixed(2), // Set calculated remaining units
                             target_qty_per_hr: targetQtyPerHour,
                             cost_per_qty: 0,
                             rsrc_type: newManpowerResource.rsrc_type,
@@ -337,11 +341,13 @@
                             act_end_date: '',
                             restart_date: '',
                             reend_date: '',
-                            act_qty: '0.0',
+                            act_reg_qty: actualUnits.toFixed(2), // Set calculated actual units
                             cost_per_qty_source_type: 'RS_Resource'
                         };
                         taskRsrcs.push(newAssignment);
                         logger.addResult('ASSIGNED', task.task_code, `Assigned ${budgetUnits.toFixed(2)} manpower units over ${durationInHours} hours.`);
+                                            logger.log(newAssignment.act_qty);
+
                     }
                 } else {
                     logger.log(`No activities found for WBS code ${group.code}.`, 'warning');
@@ -361,7 +367,6 @@
                 const relevantTasks = tasks.filter(t => desc.includes(t.wbs_id));
                 
                 if (relevantTasks.length > 0) {
-                    // 1. Calculate the total material budget specifically for this WBS group
                     const relevantTaskIds = new Set(relevantTasks.map(t => t.task_id));
                     const wbsMaterialAssignments = materialResourceAssignments.filter(r => relevantTaskIds.has(r.task_id));
                     const wbsTotalMaterialBudget = wbsMaterialAssignments.reduce((total, rsrc) => {
@@ -372,7 +377,6 @@
 
                     logger.log(`Total material budget for WBS '${group.code}': ${wbsTotalMaterialBudget.toFixed(2)}`);
 
-                    // 2. Proceed only if there is a material budget within this WBS to prorate against
                     if (wbsTotalMaterialBudget > 0) {
                         logger.log(`Found ${relevantTasks.length} ${group.code} activities to process.`);
                         
@@ -382,7 +386,6 @@
                                 .reduce((total, rsrc) => total + ((parseFloat(rsrc.target_qty) || 0) * (parseFloat(rsrc.cost_per_qty) || 0)), 0);
 
                             if (activityMaterialCost > 0) {
-                                // 3. Use the WBS-specific total for the calculation
                                 const budgetUnits = (activityMaterialCost * wbs_budget) / wbsTotalMaterialBudget;
                                 
                                 if (isNaN(budgetUnits)) {
@@ -393,6 +396,12 @@
                                 const durationInHours = parseFloat(task[DURATION_FIELD]) || 0;
                                 const targetQtyPerHour = durationInHours > 0 ? (budgetUnits / durationInHours).toFixed(2) : '0.00';
 
+                                // --- MODIFICATION START ---
+                                const physicalPercentComplete = parseFloat(task.phys_complete_pct) || 0;
+                                const actualUnits = (physicalPercentComplete / 100) * budgetUnits;
+                                const remainingUnits = budgetUnits - actualUnits;
+                                // --- MODIFICATION END ---
+
                                 const newAssignment = {
                                     ...blankAssignment,
                                     taskrsrc_id: String(++maxTaskRsrcId),
@@ -400,7 +409,7 @@
                                     proj_id: task.proj_id,
                                     rsrc_id: newManpowerResource.rsrc_id,
                                     target_qty: budgetUnits.toFixed(2),
-                                    remain_qty: budgetUnits.toFixed(2),
+                                    remain_qty: remainingUnits.toFixed(2), // Set calculated remaining units
                                     target_qty_per_hr: targetQtyPerHour,
                                     cost_per_qty: 0,
                                     rsrc_type: newManpowerResource.rsrc_type,
@@ -410,7 +419,7 @@
                                     act_end_date: '',
                                     restart_date: '',
                                     reend_date: '',
-                                    act_qty: '0.0',
+                                    act_reg_qty: actualUnits.toFixed(2), // Set calculated actual units
                                     cost_per_qty_source_type: 'RS_Resource'
                                 };
                                 taskRsrcs.push(newAssignment);
