@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XER File Processor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            color: #333;
+        }
+        #container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        #fileInput {
+            margin: 20px 0;
+        }
+        #progressBar {
+            width: 100%;
+            height: 20px;
+            background: #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        #progress {
+            height: 100%;
+            background: #4caf50;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        #logs {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 20px;
+            background: #f9f9f9;
+        }
+        #downloadLink {
+            display: none;
+            margin-top: 20px;
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+        #downloadLink:hover {
+            background: #0056b3;
+        }
+        .error {
+            color: red;
+        }
+        .warning {
+            color: orange;
+        }
+        .success {
+            color: green;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>XER File Processor</h1>
+        <input type="file" id="fileInput" accept=".xer">
+        <div id="progressBar"><div id="progress"></div></div>
+        <div id="logs"></div>
+        <a id="downloadLink" href="#" download="processed.xer">Download Processed File</a>
+    </div>
+
+    <script>
+        class ProcessorLogger {
+            constructor() {
+                this.logs = [];
+                this.resultsTable = [];
+                this.logElement = document.getElementById('logs');
+            }
+            log(message, type = 'info') {
+                console.log(`[LOG] ${type.toUpperCase()}: ${message}`);
+                const logEntry = document.createElement('div');
+                logEntry.textContent = `[${type.toUpperCase()}] ${message}`;
+                logEntry.className = type;
+                this.logElement.appendChild(logEntry);
+                this.logElement.scrollTop = this.logElement.scrollHeight;
+                this.logs.push({ message, type });
+            }
+            addResult(action, activityId, details) {
+                console.log(`[RESULT] ${action} | ${activityId} | ${details}`);
+                const logEntry = document.createElement('div');
+                logEntry.textContent = `[RESULT] ${action} | ${activityId} | ${details}`;
+                this.logElement.appendChild(logEntry);
+                this.logElement.scrollTop = this.logElement.scrollHeight;
+                this.resultsTable.push({ action, activityId, details });
+            }
+        }
+
+        function parseXERTable(content, tableName) {
+            const tableRegex = new RegExp(`%T\\s+${tableName}\\s*\\n([\\s\\S]*?)(?=%T|%E)`, 'im');
+            const match = content.match(tableRegex);
+            if (!match || !match[1]) {
+                console.log(`[DEBUG] No ${tableName} table found in XER file`);
+                return [];
+            }
+            const lines = match[1].trim().split('\n');
+            if (lines.length < 2 || !lines[0].startsWith('%F')) {
+                console.log(`[DEBUG] Invalid ${tableName} table format: ${lines[0]}`);
+                return [];
+            }
+            const headers = lines[0].substring(2).trim().split('\t');
+            const data = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (lines[i].startsWith('%R')) {
+                    const values = lines[i].substring(2).trim().split('\t');
+                    const row = {};
+                    headers.forEach((header, index) => {
+                        row[header] = values[index] || '';
+                        // Convert numeric fields
+                        if (['rsrc_id', 'task_id', 'proj_id', 'taskrsrc_id'].includes(header)) {
+                            row[header] = parseInt(row[header]) || 0;
+                        } else if (['target_qty', 'remain_qty', 'cost_per_qty', 'target_drtn_hr_cnt'].includes(header)) {
+                            row[header] = parseFloat(row[header]) || 0;
+                        }
+                    });
+                    data.push(row);
+                }
+            }
+            return data;
+        }
+
+        function reconstructXER(originalContent, tablesToUpdate) {
+            let newContent = originalContent;
+            for (const tableName in tablesToUpdate) {
+                const tableData = tablesToUpdate[tableName];
+                const tableBlockRegex = new RegExp(`(%T\\s+${tableName}\\s*\\n[\\s\\S]*?)(?=\\n%T|\\n%E)`, 'im');
+                const match = newContent.match(tableBlockRegex);
+
+                if (!tableData || tableData.length === 0) {
+                    if (match) { newContent = newContent.replace(match[0], ''); }
+                    continue;
+                }
+
+                const headerRegex = new RegExp(`%T\\s+${tableName}[\\s\\S]*?\\n%F\\s+([^\n\r]+)`);
+                const headerMatch = originalContent.match(headerRegex);
+                
+                let headers;
+                if (headerMatch && headerMatch[1]) {
+                    headers = headerMatch[1].trim().split('\t');
+                } else {
+                    console.log(`[DEBUG] Could not find original headers for ${tableName}. Inferring from data.`);
+                    headers = Object.keys(tableData[0] || {});
+                }
+
+                if (headers.length === 0) continue;
+
+                let newTableString = `%T\t${tableName}\n%F\t${headers.join('\t')}\n`;
+                tableData.forEach(row => {
+                    const values = headers.map(h => row[h] != null ? row[h] : '');
+                    newTableString += `%R\t${values.join('\t')}\n`;
+                });
+
+                if (match) {
+                    newContent = newContent.replace(match[0], newTableString);
+                } else {
+                    const endOfFileMarker = newContent.lastIndexOf('%E');
+                    if (endOfFileMarker !== -1) {
+                        newContent = newContent.substring(0, endOfFileMarker) + newTableString + '\n' + newContent.substring(endOfFileMarker);
+                    }
+                }
+            }
+            return newContent;
+        }
+
+        async function applyManpowerBudget(fileContent, loggerInstance, progressCallback = () => {}) {
+            // --- CONFIGURATION ---
+            // This variable defines which field from the TASK table is used for duration calculations.
+            // The value MUST represent a duration in HOURS, because the output field 'target_qty_per_hr' 
+            // in the XER format requires a per-hour rate.
+            const DURATION_FIELD = 'target_drtn_hr_cnt';
+
+            const logger = loggerInstance || new ProcessorLogger();
+            await progressCallback(5);
+            let content = fileContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+            logger.log('Parsing XER tables...');
+            let tasks = parseXERTable(content, 'TASK');
+            let taskRsrcs = parseXERTable(content, 'TASKRSRC');
+            let resources = parseXERTable(content, 'RSRC');
+            let wbs = parseXERTable(content, 'PROJWBS');
+            await progressCallback(10);
+
+            if (tasks.length === 0) return { error: "Could not find tasks (TASK table) in XER file." };
+            if (taskRsrcs.length === 0) return { error: "Could not find resource assignments (TASKRSRC table) in XER file." };
+            if (resources.length === 0) return { error: "Could not find resources (RSRC table) in XER file." };
+            if (wbs.length === 0) return { error: "Could not find WBS (PROJWBS table) in XER file." };
+
+            logger.log('Calculating total material budget...');
+            const materialResourceAssignments = taskRsrcs.filter(r => r.rsrc_type === 'RT_Mat');
+            const original_total_material_budget = materialResourceAssignments.reduce((total, rsrc) => {
+                const qty = parseFloat(rsrc.target_qty) || 0;
+                const price = parseFloat(rsrc.cost_per_qty) || 0;
+                return total + (qty * price);
+            }, 0);
+            
+            if (original_total_material_budget <= 0) {
+                return { error: "No material resources found or invalid budget in the XER file." };
+            }
+            
+            logger.log(`Original total material budget: ${original_total_material_budget.toFixed(2)}`);
+            await progressCallback(20);
+
+            let new_budget = original_total_material_budget;
+            const nonMaterialResourceAssignments = taskRsrcs.filter(r => r.rsrc_type === 'RT_Labor');
+            // const nonMaterialUnits = nonMaterialResourceAssignments.reduce((total, rsrc) => total + (parseFloat(rsrc.target_qty)*parseFloat(rsrc.target_qty_per_hr )|| 0), 0);
+            
+            
+             // Create a map for quick lookup of tasks by their ID
+            const taskMap = new Map(tasks.map(t => [t.task_id, t]));
+
+            // Calculate non-material units by finding the associated task for each assignment
+            // and multiplying its duration by the resource's rate (units per hour).
+            const nonMaterialUnits = nonMaterialResourceAssignments.reduce((total, rsrc) => {
+                const task = taskMap.get(rsrc.task_id);
+                if (task) {
+                    const duration = parseFloat(task.target_drtn_hr_cnt) || 0;
+                    const rate = parseFloat(rsrc.target_qty_per_hr) || 0;
+                    return total + (duration * rate);
+                }
+                return total;
+            }, 0);
+            new_budget -= nonMaterialUnits;
+            logger.log(`Total non-material units subtracted: ${nonMaterialUnits.toFixed(2)}`);
+            logger.log(`Calculated new_budget: ${new_budget.toFixed(2)}`);
+            await progressCallback(30);
+
+            logger.log('Creating new manpower resource...');
+            const rsrcHeaderRegex = new RegExp(`%T\\s+RSRC[\\s\\S]*?\\n%F\\s+([^\n\r]+)`);
+            const rsrcHeaderMatch = content.match(rsrcHeaderRegex);
+            if (!rsrcHeaderMatch || !rsrcHeaderMatch[1]) return { error: "Fatal: Could not find headers for RSRC table." };
+            const rsrcHeaders = rsrcHeaderMatch[1].trim().split('\t');
+            const blankResource = {};
+            rsrcHeaders.forEach(h => { blankResource[h] = ''; });
+
+            let maxRsrcId = Math.max(0, ...resources.map(r => parseInt(r.rsrc_id, 10) || 0));
+
+            const newManpowerResource = {
+                ...blankResource,
+                rsrc_id: String(++maxRsrcId),
+                rsrc_short_name: 'MANP',
+                rsrc_name: 'Calculated Manpower',
+                rsrc_type: 'RT_Labor',
+                cost_per_qty: '1.0',
+                proj_id: resources[0]?.proj_id || '0',
+                curr_id: 'USD',
+                rsrc_seq: String(maxRsrcId),
+                clndr_id: '1',
+                active_flag: 'Y',
+                auto_compute_act_flag: 'Y',
+                def_qty_per_hr: '0.0',
+                guid: 'MANP-' + Math.random().toString(36).substring(2, 9)
+            };
+            resources.push(newManpowerResource);
+            logger.log(`Created new resource: ${newManpowerResource.rsrc_name} (ID: ${newManpowerResource.rsrc_id})`);
+            await progressCallback(40);
+
+            const taskRsrcHeaderRegex = new RegExp(`%T\\s+TASKRSRC[\\s\\S]*?\\n%F\\s+([^\n\r]+)`);
+            const taskRsrcHeaderMatch = content.match(taskRsrcHeaderRegex);
+            if (!taskRsrcHeaderMatch || !taskRsrcHeaderMatch[1]) return { error: "Fatal: Could not find headers for TASKRSRC table." };
+            const taskRsrcHeaders = taskRsrcHeaderMatch[1].trim().split('\t');
+            const blankAssignment = {};
+            taskRsrcHeaders.forEach(h => { blankAssignment[h] = ''; });
+            let maxTaskRsrcId = Math.max(0, ...taskRsrcs.map(r => parseInt(r.taskrsrc_id, 10) || 0));
+
+            const wbsShortToId = new Map(wbs.map(w => [w.wbs_short_name, w.wbs_id]));
+            function getDescendants(code) {
+                const rootId = wbsShortToId.get(code);
+                if (!rootId) return [];
+                const desc = [];
+                function recurse(id) {
+                    desc.push(id);
+                    wbs.forEach(w => {
+                        if (w.parent_wbs_id === id) recurse(w.wbs_id);
+                    });
+                }
+                recurse(rootId);
+                return desc;
+            }
+
+            const wbsGroups = [
+                { code: 'PE', percentage: 0.03 },
+                { code: 'EN', percentage: 0.05 },
+                { code: 'PR', percentage: 0.12 },
+            ];
+
+            for (const group of wbsGroups) {
+                logger.log(`Processing WBS group: ${group.code}`);
+                const desc = getDescendants(group.code);
+                const relevantTasks = tasks.filter(t => desc.includes(t.wbs_id));
+                
+                if (relevantTasks.length > 0) {
+                    const totalGroupBudget = group.percentage * new_budget;
+                    const budgetUnits = totalGroupBudget / relevantTasks.length;
+                    
+                    if (isNaN(budgetUnits)) {
+                        logger.log(`Invalid budget calculation for group ${group.code}`, 'error');
+                        continue;
+                    }
+                    
+                    logger.log(`Found ${relevantTasks.length} activities for ${group.code}. Assigning ${budgetUnits.toFixed(2)} units to each.`);
+                    
+                    for (const task of relevantTasks) {
+                        const durationInHours = parseFloat(task[DURATION_FIELD]) || 0;
+                        const targetQtyPerHour = durationInHours > 0 ? (budgetUnits / durationInHours).toFixed(2) : '0.00';
+                        
+                        const newAssignment = {
+                            ...blankAssignment,
+                            taskrsrc_id: String(++maxTaskRsrcId),
+                            task_id: task.task_id,
+                            proj_id: task.proj_id,
+                            rsrc_id: newManpowerResource.rsrc_id,
+                            target_qty: budgetUnits.toFixed(2),
+                            remain_qty: budgetUnits.toFixed(2),
+                            target_qty_per_hr: targetQtyPerHour,
+                            cost_per_qty: 0,
+                            rsrc_type: newManpowerResource.rsrc_type,
+                            acct_id: task.acct_id || '',
+                            target_cost: 0,
+                            act_start_date: '',
+                            act_end_date: '',
+                            restart_date: '',
+                            reend_date: '',
+                            act_qty: '0.0',
+                            cost_per_qty_source_type: 'RS_Resource'
+                        };
+                        taskRsrcs.push(newAssignment);
+                        logger.addResult('ASSIGNED', task.task_code, `Assigned ${budgetUnits.toFixed(2)} manpower units over ${durationInHours} hours.`);
+                    }
+                } else {
+                    logger.log(`No activities found for WBS code ${group.code}.`, 'warning');
+                }
+            }
+            await progressCallback(60);
+
+            const costBasedGroups = [
+                { code: 'CN', budget_multiplier: 0.75 },
+                { code: 'TC', budget_multiplier: 0.05 }
+            ];
+
+            for (const group of costBasedGroups) {
+                logger.log(`Processing WBS group: ${group.code}`);
+                const wbs_budget = group.budget_multiplier * new_budget;
+                const desc = getDescendants(group.code);
+                const relevantTasks = tasks.filter(t => desc.includes(t.wbs_id));
+                
+                if (relevantTasks.length > 0) {
+                    // 1. Calculate the total material budget specifically for this WBS group
+                    const relevantTaskIds = new Set(relevantTasks.map(t => t.task_id));
+                    const wbsMaterialAssignments = materialResourceAssignments.filter(r => relevantTaskIds.has(r.task_id));
+                    const wbsTotalMaterialBudget = wbsMaterialAssignments.reduce((total, rsrc) => {
+                        const qty = parseFloat(rsrc.target_qty) || 0;
+                        const price = parseFloat(rsrc.cost_per_qty) || 0;
+                        return total + (qty * price);
+                    }, 0);
+
+                    logger.log(`Total material budget for WBS '${group.code}': ${wbsTotalMaterialBudget.toFixed(2)}`);
+
+                    // 2. Proceed only if there is a material budget within this WBS to prorate against
+                    if (wbsTotalMaterialBudget > 0) {
+                        logger.log(`Found ${relevantTasks.length} ${group.code} activities to process.`);
+                        
+                        for (const task of relevantTasks) {
+                            const activityMaterialCost = taskRsrcs
+                                .filter(r => r.task_id === task.task_id && r.rsrc_type === 'RT_Mat')
+                                .reduce((total, rsrc) => total + ((parseFloat(rsrc.target_qty) || 0) * (parseFloat(rsrc.cost_per_qty) || 0)), 0);
+
+                            if (activityMaterialCost > 0) {
+                                // 3. Use the WBS-specific total for the calculation
+                                const budgetUnits = (activityMaterialCost * wbs_budget) / wbsTotalMaterialBudget;
+                                
+                                if (isNaN(budgetUnits)) {
+                                    logger.log(`Invalid budget calculation for task ${task.task_code}`, 'error');
+                                    continue;
+                                }
+                                
+                                const durationInHours = parseFloat(task[DURATION_FIELD]) || 0;
+                                const targetQtyPerHour = durationInHours > 0 ? (budgetUnits / durationInHours).toFixed(2) : '0.00';
+
+                                const newAssignment = {
+                                    ...blankAssignment,
+                                    taskrsrc_id: String(++maxTaskRsrcId),
+                                    task_id: task.task_id,
+                                    proj_id: task.proj_id,
+                                    rsrc_id: newManpowerResource.rsrc_id,
+                                    target_qty: budgetUnits.toFixed(2),
+                                    remain_qty: budgetUnits.toFixed(2),
+                                    target_qty_per_hr: targetQtyPerHour,
+                                    cost_per_qty: 0,
+                                    rsrc_type: newManpowerResource.rsrc_type,
+                                    acct_id: task.acct_id || '',
+                                    target_cost: 0,
+                                    act_start_date: '',
+                                    act_end_date: '',
+                                    restart_date: '',
+                                    reend_date: '',
+                                    act_qty: '0.0',
+                                    cost_per_qty_source_type: 'RS_Resource'
+                                };
+                                taskRsrcs.push(newAssignment);
+                                logger.addResult('ASSIGNED', task.task_code, `Assigned ${budgetUnits.toFixed(2)} manpower units over ${durationInHours} hours.`);
+                            }
+                        }
+                    } else {
+                        logger.log(`No material budget found for WBS group ${group.code}. Skipping assignment.`, 'warning');
+                    }
+                } else {
+                    logger.log(`No activities found for WBS code ${group.code}.`, 'warning');
+                }
+            } await progressCallback(90);
+
+            logger.log('Reconstructing XER file with new assignments...');
+            const modifiedFileContent = reconstructXER(content, { 'TASKRSRC': taskRsrcs, 'RSRC': resources });
+            logger.log('Processing complete. File is ready for download.', 'success');
+            await progressCallback(100);
+            return { modifiedFileContent, logger };
+        }
+
+        const fileInput = document.getElementById('fileInput');
+        const progress = document.getElementById('progress');
+        const downloadLink = document.getElementById('downloadLink');
+
+        fileInput.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            progress.style.width = '0%';
+            downloadLink.style.display = 'none';
+            document.getElementById('logs').innerHTML = '';
+
+            const logger = new ProcessorLogger();
+            const reader = new FileReader();
+
+            reader.onload = async (e) => {
+                const content = e.target.result;
+                try {
+                    const result = await applyManpowerBudget(content, logger, (progressValue) => {
+                        progress.style.width = `${progressValue}%`;
+                        return Promise.resolve();
+                    });
+                    
+                    if (result.error) {
+                        logger.log(result.error, 'error');
+                        return;
+                    }
+                    
+                    const blob = new Blob([result.modifiedFileContent], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    downloadLink.href = url;
+                    downloadLink.style.display = 'inline-block';
+                } catch (err) {
+                    logger.log(`Error processing file: ${err.message}`, 'error');
+                    console.error(err);
+                }
+            };
+            
+            reader.onerror = () => {
+                logger.log('Error reading file', 'error');
+            };
+            
+            reader.readAsText(file);
+        });
+    </script>
+</body>
+</html>
