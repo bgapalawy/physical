@@ -228,14 +228,15 @@
             const nonMaterialUnits = nonMaterialResourceAssignments.reduce((total, rsrc) => {
                 const task = taskMap.get(rsrc.task_id);
                 if (task) {
-                    const duration = parseFloat(task.target_drtn_hr_cnt) || 0;
-                    const rate = parseFloat(rsrc.target_qty_per_hr) || 0;
-                    return total + (duration * rate);
+                    // const duration = parseFloat(task.target_drtn_hr_cnt) || 0;
+                    // const rate = parseFloat(rsrc.target_qty_per_hr) || 0;
+                    // return total + (duration * rate);
+                    return total +parseFloat(rsrc.target_qty) || 0;
                 }
                 return total;
             }, 0);
             new_budget -= nonMaterialUnits;
-            logger.log(`Total non-material units subtracted: ${nonMaterialUnits.toFixed(2)}`);
+            logger.log(`Total Labor units subtracted: ${nonMaterialUnits.toFixed(2)}`);
             logger.log(`Calculated new_budget: ${new_budget.toFixed(2)}`);
             await progressCallback(30);
 
@@ -333,6 +334,7 @@
                             target_qty: budgetUnits.toFixed(2),
                             remain_qty: remainingUnits.toFixed(2), // Set calculated remaining units
                             target_qty_per_hr: targetQtyPerHour,
+                            remain_qty_per_hr: targetQtyPerHour,
                             cost_per_qty: 0,
                             rsrc_type: newManpowerResource.rsrc_type,
                             acct_id: task.acct_id || '',
@@ -341,6 +343,12 @@
                             act_end_date: '',
                             restart_date: '',
                             reend_date: '',
+                             // --- MODIFICATION START ---
+                            act_start_date: task.act_start_date || '',
+                            act_end_date: task.act_end_date || '',
+                            target_start_date: task.start_date || '',
+                            target_end_date: task.end_date || '',
+                            // --- MODIFICATION END ---
                             act_reg_qty: actualUnits.toFixed(2), // Set calculated actual units
                             cost_per_qty_source_type: 'RS_Resource'
                         };
@@ -411,6 +419,7 @@
                                     target_qty: budgetUnits.toFixed(2),
                                     remain_qty: remainingUnits.toFixed(2), // Set calculated remaining units
                                     target_qty_per_hr: targetQtyPerHour,
+                                    remain_qty_per_hr: targetQtyPerHour,
                                     cost_per_qty: 0,
                                     rsrc_type: newManpowerResource.rsrc_type,
                                     acct_id: task.acct_id || '',
@@ -419,6 +428,13 @@
                                     act_end_date: '',
                                     restart_date: '',
                                     reend_date: '',
+
+                                    // --- MODIFICATION START ---
+                                    act_start_date: task.act_start_date || '',
+                            act_end_date: task.act_end_date || '',
+                            target_start_date: task.start_date || '',
+                            target_end_date: task.end_date || '',
+                                    // --- MODIFICATION END ---
                                     act_reg_qty: actualUnits.toFixed(2), // Set calculated actual units
                                     cost_per_qty_source_type: 'RS_Resource'
                                 };
