@@ -464,7 +464,12 @@
         fileInput.addEventListener('change', async (event) => {
             const file = event.target.files[0];
             if (!file) return;
-
+// --- MODIFICATION START ---
+            // Get original filename and create a new name for the processed file
+            const originalFileName = file.name;
+            const nameWithoutExtension = originalFileName.lastIndexOf('.') > 0 ? originalFileName.substring(0, originalFileName.lastIndexOf('.')) : originalFileName;
+            const newFileName = `${nameWithoutExtension}_processed.xer`;
+            // --- MODIFICATION END ---
             progress.style.width = '0%';
             downloadLink.style.display = 'none';
             document.getElementById('logs').innerHTML = '';
@@ -488,6 +493,11 @@
                     const blob = new Blob([result.modifiedFileContent], { type: 'text/plain' });
                     const url = URL.createObjectURL(blob);
                     downloadLink.href = url;
+
+                    // --- MODIFICATION START ---
+                    // Set the new filename for the download link
+                    downloadLink.download = newFileName;
+                    // --- MODIFICATION END ---
                     downloadLink.style.display = 'inline-block';
                 } catch (err) {
                     logger.log(`Error processing file: ${err.message}`, 'error');
